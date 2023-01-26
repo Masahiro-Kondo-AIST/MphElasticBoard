@@ -1,0 +1,10 @@
+#######
+Dt						1.0e-4
+OutputInterval			1.0e-2
+EndTime					1.0
+Radius					0.018
+Density					1000
+Young					1.0e8
+Poiss					0.3
+Thickness				0.01
+

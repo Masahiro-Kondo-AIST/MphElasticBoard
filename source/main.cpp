@@ -1,6 +1,6 @@
 //================================================================================================//
 //------------------------------------------------------------------------------------------------//
-//    MPH-I : Moving Particle Hydrodynamics for Elastic Board                                     //
+//    MPH-ElasticPlate : Moving Particle Hydrodynamics for Elastic Plate                          //
 //------------------------------------------------------------------------------------------------//
 //    Developed by    : Masahiro Kondo                                                            //
 //    Distributed in  : 2023                                                                      //
@@ -8,7 +8,8 @@
 //    For instruction : see README                                                                //
 //    For theory      : see the following references                                              //
 //     [1] JSCES Paper No.20100016,   https://doi.org/10.11421/jsces.2010.20100016                //
-//    Copyright (c) 2010   Masahiro Kondo                                                         //
+//    Copyright (c) 2010  Masahiro Kondo                                                          //
+//    Copyright (c) 2023  National Institute of Advanced Industrial Science and Technology (AIST) //
 //================================================================================================//
 
 #include <cstdio>
@@ -61,6 +62,7 @@ const int INT_MINUS[MAX_STORED_COUNT]={ -1,-1,-1,-1,-1,-1,-1,-1, -1,-1,-1,-1,-1,
 #define  DEFAULT_DATA "sample.data"
 #define  DEFAULT_GRID "sample.grid"
 #define  DEFAULT_PROF "sample%03d.prof"
+#define  DEFAULT_VTK  "sample%03d.vtk"
 #define  DEFAULT_ENE  "sample.ene"
 
 // Calculation and Output
@@ -68,6 +70,8 @@ static double DomainMin[DIM];
 static double DomainMax[DIM];
 static double OutputInterval=0.0;
 static double OutputNext=0.0;
+static double VtkOutputInterval=0.0;
+static double VtkOutputNext=0.0;
 static double EndTime=0.0;
 static double Time=0.0;
 static double Dt=1.0e100;
@@ -111,6 +115,7 @@ static double BendingPotential;
 static void readDataFile(char *filename);
 static void readGridFile(char *filename);
 static void writeProfFile(char *filename);
+static void writeVtkFile(char *filename);
 static void initializeDomain( void );
 static void calculateNeighbor( t_plist *neighbor, const double (*position)[DIM] );
 static void calculateCoefficientTensor();
@@ -123,6 +128,9 @@ static void calculateExternalForce();
 static void calculateConvection();
 
 static void writeEnergyFile(char *filename);
+	
+	clock_t cFrom, cTill, cStart, cEnd;
+	clock_t cInitialize=0, cReset=0, cDeformation=0, cCurvature=0, cMotion=0, cExternal=0, cOutput=0, cEnergyOutput=0, cConvection=0;
 
 int main(int argc, char *argv[])
 {
@@ -130,13 +138,15 @@ int main(int argc, char *argv[])
     char datafilename[1024] = DEFAULT_DATA;
     char gridfilename[1024] = DEFAULT_GRID;
     char proffilename[1024] = DEFAULT_PROF;
+	char vtkfilename[1024]  = DEFAULT_VTK;
     char energyfilename[1024]=DEFAULT_ENE;
     {
         if(argc>1)strcpy(datafilename,argv[1]);
         if(argc>2)strcpy(gridfilename,argv[2]);
         if(argc>3)strcpy(proffilename,argv[3]);
-        if(argc>4)strcpy(energyfilename,argv[4]);
-        if(argc>5)strcpy( logfilename,argv[5]);
+    	if(argc>4)strcpy(vtkfilename,argv[4]);
+        if(argc>5)strcpy(energyfilename,argv[5]);
+        if(argc>6)strcpy( logfilename,argv[6]);
     }
     log_open(logfilename);
     {
@@ -158,12 +168,23 @@ int main(int argc, char *argv[])
         log_printf("start main roop at %s\n",ctime(&t));
     }
     int iStep=(int)(Time/Dt);
+	OutputNext = Time;
+	VtkOutputNext = Time;
+	cStart = clock();
+	cFrom = cStart;
+	
+	cTill = clock(); cInitialize += (cTill-cFrom); cFrom = cTill;
     while(Time < EndTime + 1.0e-5*Dt){
         resetAcceleration();
+    	cTill = clock(); cReset += (cTill-cFrom); cFrom = cTill;
         calculateDeformationGradient();
+    	cTill = clock(); cDeformation += (cTill-cFrom); cFrom = cTill;
         calculateCurvatureTensor();
+    	cTill = clock(); cCurvature += (cTill-cFrom); cFrom = cTill;
         calculateMotionEquation();
+    	cTill = clock(); cMotion += (cTill-cFrom); cFrom = cTill;
         calculateExternalForce();
+    	cTill = clock(); cExternal += (cTill-cFrom); cFrom = cTill;
         if( Time + 1.0e-5*Dt >= OutputNext ){
             char filename[256];
             sprintf(filename,proffilename,iStep);
@@ -171,8 +192,18 @@ int main(int argc, char *argv[])
             log_printf("@ Prof Output Time : %e\n", Time );
             OutputNext += OutputInterval;
         }
+    	if( Time + 1.0e-5*Dt >= VtkOutputNext ){
+			char filename[256];
+			sprintf(filename,vtkfilename,iStep);
+			writeVtkFile(filename);
+			log_printf("@ Vtk Output Time:%lf\n",Time);
+			VtkOutputNext += VtkOutputInterval;
+		}
+    	cTill = clock(); cOutput += (cTill-cFrom); cFrom = cTill;
         writeEnergyFile( energyfilename );
+    	cTill = clock(); cEnergyOutput += (cTill-cFrom); cFrom = cTill;
         calculateConvection();
+    	cTill = clock(); cConvection += (cTill-cFrom); cFrom = cTill;
 
         Time += Dt;
         iStep++;
@@ -181,6 +212,21 @@ int main(int argc, char *argv[])
         time_t t=time(NULL);
         log_printf("end main roop at %s\n",ctime(&t));
     }
+	cEnd = cTill;
+    {
+    	log_printf("initialize:              %lf [CPU sec]\n", (double)cInitialize/CLOCKS_PER_SEC);
+    	log_printf("reset acceleration:      %lf [CPU sec]\n", (double)cReset/CLOCKS_PER_SEC);
+    	log_printf("deformation gradient:    %lf [CPU sec]\n", (double)cDeformation/CLOCKS_PER_SEC);
+    	log_printf("curvature:               %lf [CPU sec]\n", (double)cCurvature/CLOCKS_PER_SEC);
+    	log_printf("motion equation:         %lf [CPU sec]\n", (double)cMotion/CLOCKS_PER_SEC);
+    	log_printf("external force:          %lf [CPU sec]\n", (double)cExternal/CLOCKS_PER_SEC);
+    	log_printf("output:                  %lf [CPU sec]\n", (double)cOutput/CLOCKS_PER_SEC);
+    	log_printf("energy output:           %lf [CPU sec]\n", (double)cEnergyOutput/CLOCKS_PER_SEC);
+    	log_printf("convection:              %lf [CPU sec]\n", (double)cConvection/CLOCKS_PER_SEC);
+    	log_printf("total:                   %lf [CPU sec]\n", (double)(cInitialize+cReset+cDeformation+cCurvature+cMotion+cExternal+cOutput+cEnergyOutput+cConvection)/CLOCKS_PER_SEC);
+    	log_printf("total (check):           %lf [CPU sec]\n", (double)(cEnd-cStart)/CLOCKS_PER_SEC);
+    }
+
     
     return 0;
     
@@ -207,6 +253,7 @@ static void readDataFile(char *filename)
         if(buf[0]=='#'){}
         else if(sscanf(buf," Dt %lf",&Dt)==1){mode=reading_global;}
         else if(sscanf(buf," OutputInterval %lf",&OutputInterval)==1){mode=reading_global;}
+        else if(sscanf(buf," VtkOutputInterval %lf",&VtkOutputInterval)==1){mode=reading_global;}
         else if(sscanf(buf," EndTime %lf",&EndTime)==1){mode=reading_global;}
         else if(sscanf(buf," Radius %lf",&Radius)==1){mode=reading_global;}
         else if(sscanf(buf," Density %lf", &Density)==1){mode=reading_global;}
@@ -281,7 +328,7 @@ static void writeProfFile(char *filename)
     const double (*v)[DIM] = Velocity;
     
     for(int iP=0;iP<ParticleCount;++iP){
-            fprintf(fp,"%d %e %e %e %e %e %e %\n",
+            fprintf(fp,"%d %e %e %e %e %e %e %e %e %e %\n",
                     Property[iP],
                     q[iP][0], q[iP][1], q[iP][2],
                     v[iP][0], v[iP][1], v[iP][2],
@@ -290,6 +337,59 @@ static void writeProfFile(char *filename)
     fflush(fp);
     fclose(fp);
 }
+	
+
+static void writeVtkFile(char *filename)
+{
+		
+	FILE *fp=fopen(filename, "w");
+	
+	fprintf(fp, "# vtk DataFile Version 2.0\n");
+	fprintf(fp, "Unstructured Grid Example\n");
+	fprintf(fp, "ASCII\n");
+	
+	fprintf(fp, "DATASET UNSTRUCTURED_GRID\n");
+	fprintf(fp, "POINTS %d float\n", ParticleCount);
+	for(int iP=0;iP<ParticleCount;++iP){
+		fprintf(fp, "%e %e %e\n", (float)Position[iP][0], (float)Position[iP][1], (float)Position[iP][2]);
+	}
+	fprintf(fp, "CELLS %d %d\n", ParticleCount, 2*ParticleCount);
+	for(int iP=0;iP<ParticleCount;++iP){
+		fprintf(fp, "1 %d ",iP);
+	}
+	fprintf(fp, "\n");
+	fprintf(fp, "CELL_TYPES %d\n", ParticleCount);
+	for(int iP=0;iP<ParticleCount;++iP){
+		fprintf(fp, "1 ");
+	}
+	fprintf(fp, "\n");
+	
+	fprintf(fp, "\n");
+	
+	fprintf(fp, "POINT_DATA %d\n", ParticleCount);
+	fprintf(fp, "SCALARS label float 1\n");
+	fprintf(fp, "LOOKUP_TABLE default\n");
+	for(int iP=0;iP<ParticleCount;++iP){
+		fprintf(fp, "%d\n", Property[iP]);
+	}
+	fprintf(fp, "\n");
+	
+	fprintf(fp, "VECTORS velocity float\n");
+	for(int iP=0;iP<ParticleCount;++iP){
+		fprintf(fp, "%e %e %e\n", (float)Velocity[iP][0], (float)Velocity[iP][1], (float)Velocity[iP][2]);
+	}
+	fprintf(fp, "\n");
+	fprintf(fp, "VECTORS displacement float\n");
+	for(int iP=0;iP<ParticleCount;++iP){
+		const double displacement[DIM]={Position[iP][0]-InitialPosition[iP][0],Position[iP][1]-InitialPosition[iP][1],Position[iP][2]-InitialPosition[iP][2]};
+		fprintf(fp, "%e %e %e\n", (float)displacement[0], (float)displacement[1], (float)displacement[2]);
+	}
+	fprintf(fp, "\n");
+	
+	fflush(fp);
+	fclose(fp);
+}
+
 
 static void initializeDomain( void )
 {

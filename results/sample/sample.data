@@ -1,7 +1,8 @@
 #######
 Dt						1.0e-4
 OutputInterval			1.0e-2
-EndTime					1.0
+VtkOutputInterval		1.0e-3
+EndTime					0.1
 Radius					0.018
 Density					1000
 Young					1.0e8
